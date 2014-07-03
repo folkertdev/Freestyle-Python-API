@@ -120,16 +120,15 @@ def find_matching_vertex(id, it):
 
 def pairwise(iterable):
     """Yields a tuple containing the previous and current object """
-    
-    # try:
-    #     it = iter(iterable)
-    #     a = it.__class__(it)
-    #     b = it.__class__(it)
-    # except TypeError:
-    #     a,b = tee(iterable)
-    a,b = tee(iterable)
-    next(b, None)
-    return zip(a, b)
+    # use .incremented() for types that support it
+    if type(iterable).__name__ in {'Stroke', 'StrokeVertexIterator'}:
+        it = iter(iterable)
+        return zip(it, it.incremented())
+    else:
+        a,b = tee(iterable)
+        next(b, None)
+        return zip(a, b)
+
 
 def tripplewise(iterable):
     """Yields a tuple containing the current object and its immediate neighbors """
@@ -162,31 +161,28 @@ def iter_distance_from_camera(stroke, range_min, range_max):
         # length in the camera coordinate
         distance = svert.point_3d.length
         if range_min < distance < range_max:
-            yield (distance - range_min) / normfac
+            yield (svert, (distance - range_min) / normfac)
         else:
-            yield 0.0 if range_min > distance else 1.0
+            yield (svert, 0.0) if range_min > distance else (svert, 1.0)
 
-
-def iter_distance_from_object(stroke, location, range_min, range_max):
+def iter_distance_from_object(stroke, location, range):
     """
     yields the distance to the given object relative to the maximum
     possible distance for every stroke vertex, constrained by
     given minimum and maximum values.
     """
+    range_min, range_max = range 
     normfac = range_max - range_min  # normalization factor
     for svert in stroke:
         distance = (svert.point_3d - location).length # in the camera coordinate
         if range_min < distance < range_max:
-            yield (distance - range_min) / normfac
+            yield (svert, (distance - range_min) / normfac)
         else:
-            yield 0.0 if distance < range_min else 1.0
+            yield (svert, 0.0) if distance < range_min else (svert, 1.0)
 
 
 def get_material_value(material, attribute):
-    """
-    Returns a specific material attribute
-    from the vertex' underlying material.
-    """
+    "Returns a specific material attribute from the vertex' underlying material. "
     # main
     if attribute == 'DIFF':
         return rgb_to_bw(*material.diffuse[0:3])
@@ -215,10 +211,7 @@ def get_material_value(material, attribute):
 
 
 def iter_distance_along_stroke(stroke):
-    """
-    yields the absolute distance between
-    the current and preceding vertex.
-    """
+    "Yields the absolute distance along the stroke up to the current vertex."
     distance = 0.0
     # the positions need to be copied, because they are changed in the calling function
     points = tuple(svert.point.copy() for svert in stroke)

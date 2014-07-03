@@ -157,8 +157,9 @@ class AndUP1D(UnaryPredicate1D):
     def __init__(self, *predicates):
         UnaryPredicate1D.__init__(self)
         self.predicates = predicates
-        if len(self.predicates) < 2:
-            raise ValueError("Expected two or more UnaryPredicate1D")
+        # there are cases in which only one predicate is supplied (in the parameter editor)
+        if len(self.predicates) < 1:
+            raise ValueError("Expected two or more UnaryPredicate1D, got" + str(predicates))
 
     def __call__(self, inter):
         return all(pred(inter) for pred in self.predicates)
@@ -168,8 +169,9 @@ class OrUP1D(UnaryPredicate1D):
     def __init__(self, *predicates):
         UnaryPredicate1D.__init__(self)
         self.predicates = predicates
-        if len(self.predicates) < 2:
-            raise ValueError("Expected two or more UnaryPredicate1D")
+        # there are cases in which only one predicate is supplied (in the parameter editor)
+        if len(self.predicates) < 1:
+            raise ValueError("Expected two or more UnaryPredicate1D, got" + str(predicates))
 
     def __call__(self, inter):
         return any(pred(inter) for pred in self.predicates)

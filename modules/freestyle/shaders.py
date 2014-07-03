@@ -87,7 +87,7 @@ from freestyle.utils import (
 
 from freestyle.utils import ContextFunctions as CF
 
-from math import atan, cos, pi, sin, sinh, sqrt
+from math import atan, cos, pi, sin, sinh, sqrt, degrees, acos
 from mathutils import Vector
 from random import randint
 
@@ -356,6 +356,90 @@ class pyZDependingThicknessShader(StrokeShader):
             svert.attribute.thickness = (thickness, thickness)
 
 
+class VariableContourThicknessShader(StrokeShader):
+    def __init__(self, Kr1, Kr2, thickness1, thickness2):
+        StrokeShader.__init__(self)
+        self.k1 = Kr1
+        self.k2 = Kr2
+        self.thickness_min = thickness1
+        self.thickness_max = thickness2
+ 
+    def shade(self, stroke):
+        delta_t = self.thickness_max - self.thickness_min
+        fac = pow(self.k2 - self.k1, -1)
+        for svert in stroke:
+
+            curvatures = svert.first_svertex.curvatures
+            c1 = abs(curvatures[4]) if curvatures is not None else None 
+            curvatures = svert.second_svertex.curvatures
+            c2 = abs(curvatures[4]) if curvatures is not None else None 
+
+            if (c1 or c2) is None:
+                svert.attribute.thickness = (0.0, 0.0)
+                continue
+
+            if None not in {c1, c2}:
+                Kr = c1 + svert.t2d * (c2 - c1)
+            else:
+                Kr = c1 if c1 is not None else c2
+
+
+
+            if self.thickness_min <= Kr <= self.thickness_max:
+                self.thickness_min + delta_t * (Kr - self.k1) * fac
+            else:
+                bound(self.thickness_min, Kr, self.thickness_max)
+
+            svert.attribute.thickness = (Kr/2, Kr/2)
+
+
+class CreaseAngleDependentThicknessShader1(StrokeShader):
+    def __init__(self, angle1, angle2, thickness1, thickness2):
+        StrokeShader.__init__(self)
+        self.angle_min = angle1
+        self.angle_max = angle2
+        self.thickness_min = thickness1
+        self.thickness_max = thickness2
+ 
+    def shade(self, stroke):
+        delta_t = self.thickness_max - self.thickness_min
+        fac = pow(self.angle_max - self.angle_min, -1)
+        for svert in stroke:
+            fe = svert.first_svertex.get_fedge(svert.second_svertex)
+            if not fe.is_smooth:
+                angle = degrees(acos(-fe.normal_left.dot(fe.normal_right)))
+                if self.angle_min <= angle <= self.angle_max:
+                    t = self.thickness_min + delta_t * (angle - self.angle_min) * fac
+                else:
+                    t = bound(self.angle_min, angle, self.angle_max)
+                    
+                #print(angle, t)
+                svert.attribute.thickness = (t/2, t/2)
+
+class CreaseAngleDependentThicknessShader(StrokeShader):
+    def __init__(self, angle1, angle2, thickness1, thickness2):
+        StrokeShader.__init__(self)
+        self.angle_min = angle1
+        self.angle_max = angle2
+        self.thickness_min = thickness1
+        self.thickness_max = thickness2
+
+    def shade(self, stroke):
+        delta_t = self.thickness_max - self.thickness_min
+        fac = pow(self.angle_max - self.angle_min, -1)
+        for svert in stroke:
+            fe = svert.first_svertex.get_fedge(svert.second_svertex)
+            if not fe.is_smooth:
+                angle = degrees(acos(-fe.normal_left.dot(fe.normal_right)))
+                
+                if angle < self.angle_min:
+                    t = self.thickness_min
+                elif angle > self.angle_max:
+                    t = self.thickness_max
+                else:
+                    t = self.thickness_min + delta_t * (angle - self.angle_min) * fac
+
+                svert.attribute.thickness = (t/2, t/2)
 
 # -- Color & Alpha Stroke Shaders -- #
 
