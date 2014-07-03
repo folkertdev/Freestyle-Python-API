@@ -109,7 +109,8 @@ from itertools import cycle, tee
 from functools import lru_cache, namedtuple
 
 Thickness = namedtuple("Thickness", ["min", "max", "delta"])
-Range = namedtuple("Range", ["min", "max"])
+Range = namedtuple("Range", ["min", "max", "delta"])
+#Range.__new__.__defaults__ = (0.0, 0.0, 0.0)
 Value = namedtuple("Value", ["min", "max", "delta"])
 
 
@@ -117,46 +118,46 @@ class ColorRampModifier(StrokeShader):
     """Primitive for the color modifiers """
     def __init__(self, blend, influence, ramp):
         StrokeShader.__init__(self)
-        self.__blend = blend
-        self.__influence = influence
-        self.__ramp = ramp
+        self.blend = blend
+        self.influence = influence
+        self.ramp = ramp
 
     def evaluate(self, t):
-        col = evaluateColorRamp(self.__ramp, t)
+        col = evaluateColorRamp(self.ramp, t)
         return col.xyz  # omit alpha
 
     def blend_ramp(self, a, b):
-        return blendRamp(self.__blend, a, self.__influence, b)
+        return blendRamp(self.blend, a, self.influence, b)
 
 
 class ScalarBlendModifier(StrokeShader):
     """Primitive for alpha and thickness modifiers """
-    def __init__(self, blend, influence):
+    def __init__(self, blend_type, influence):
         StrokeShader.__init__(self)
-        self.__blend = blend
-        self.__influence = influence
+        self.blend_type = blend_type
+        self.influence = influence
 
     def blend(self, v1, v2):
-        fac = self.__influence
+        fac = self.influence
         facm = 1.0 - fac
-        if self.__blend == 'MIX':
+        if self.blend_type == 'MIX':
             v1 = facm * v1 + fac * v2
-        elif self.__blend == 'ADD':
+        elif self.blend_type == 'ADD':
             v1 += fac * v2
-        elif self.__blend == 'MULTIPLY':
+        elif self.blend_type == 'MULTIPLY':
             v1 *= facm + fac * v2
-        elif self.__blend == 'SUBTRACT':
+        elif self.blend_type == 'SUBTRACT':
             v1 -= fac * v2
-        elif self.__blend == 'DIVIDE':
+        elif self.blend_type == 'DIVIDE':
             v1 = facm * v1 + fac * v1 / v2 if v2 != 0.0 else v1
-        elif self.__blend == 'DIFFERENCE':
+        elif self.blend_type == 'DIFFERENCE':
             v1 = facm * v1 + fac * abs(v1 - v2)
-        elif self.__blend == 'MININUM':
+        elif self.blend_type == 'MININUM':
             v1 = min(fac * v2, v1)
-        elif self.__blend == 'MAXIMUM':
+        elif self.blend_type == 'MAXIMUM':
             v1 = max(fac * v2, v1)
         else:
-            raise ValueError("unknown curve blend type: " + self.__blend)
+            raise ValueError("unknown curve blend type: " + self.blend_type)
         return v1
 
 
@@ -170,10 +171,10 @@ class CurveMappingModifier(ScalarBlendModifier):
         self.curve = curve
 
     def LINEAR(self, t):
-        return (1.0 - t) if self.__invert else t
+        return (1.0 - t) if self.invert else t
 
     def CURVE(self, t):
-        return evaluateCurveMappingF(self.__curve, 0, t)
+        return evaluateCurveMappingF(self.curve, 0, t)
 
     def evaluate(self, t):
         """ Shortcut for the above methods, significantly faster """
@@ -184,13 +185,13 @@ class CurveMappingModifier(ScalarBlendModifier):
 class ThicknessModifierMixIn:
     def __init__(self):
         scene = getCurrentScene()
-        self.__persp_camera = (scene.camera.data.type == 'PERSP')
+        self.persp_camera = (scene.camera.data.type == 'PERSP')
 
     def set_thickness(self, sv, outer, inner):
         fe = sv.first_svertex.get_fedge(sv.second_svertex)
         nature = fe.nature
         if (nature & Nature.BORDER):
-            if self.__persp_camera:
+            if self.persp_camera:
                 point = -sv.point_3d.normalized()
                 dir = point.dot(fe.normal_left)
             else:
@@ -208,25 +209,25 @@ class ThicknessModifierMixIn:
 class ThicknessBlenderMixIn(ThicknessModifierMixIn):
     def __init__(self, position, ratio):
         ThicknessModifierMixIn.__init__(self)
-        self.position = self.__position = position
-        self.__ratio = ratio
+        self.position = self.position = position
+        self.ratio = ratio
 
     def blend_thickness(self, outer, inner, v):
         v = self.blend(outer + inner, v)
-        if self.__position == 'CENTER':
+        if self.position == 'CENTER':
             outer = v * 0.5
             inner = v - outer
-        elif self.__position == 'INSIDE':
+        elif self.position == 'INSIDE':
             outer = 0
             inner = v
-        elif self.__position == 'OUTSIDE':
+        elif self.position == 'OUTSIDE':
             outer = v
             inner = 0
-        elif self.__position == 'RELATIVE':
-            outer = v * self.__ratio
+        elif self.position == 'RELATIVE':
+            outer = v * self.ratio
             inner = v - outer
         else:
-            raise ValueError("unknown thickness position: " + self.__position)
+            raise ValueError("unknown thickness position: " + self.position)
         return outer, inner
 
     def blend_set_thickness(self, svert, v):
@@ -234,7 +235,8 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
         and is generally more efficient, as both methods are called with almost the same
         arguments 
         """
-        outer, inner = svert.attribute.thickness 
+        outer, inner = svert.attribute.thickness
+        #print(self.blend, type(self.blend))
         v = self.blend(outer + inner, v)
 
         # Part 1: blend 
@@ -245,7 +247,7 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
         elif self.position == "OUTSIDE":
             outer, inner = v, 0
         elif self.position == "RELATIVE":
-            outer, inner = v * self.__ratio, v - (v * self.__ratio)
+            outer, inner = v * self.ratio, v - (v * self.ratio)
         else:
             raise ValueError("unknown thickness position: " + position)
 
@@ -253,7 +255,7 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
         fe = svert.first_svertex.get_fedge(svert.second_svertex)
         nature = fe.nature
         if (nature & Nature.BORDER):
-            if self.__persp_camera:
+            if self.persp_camera:
                 point = -svert.point_3d.normalized()
                 dir = point.dot(fe.normal_left)
             else:
@@ -268,32 +270,28 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
         svert.attribute.thickness = (outer, inner)
 
 
-class BaseColorShader(ConstantColorShader):
-    pass
-
-
 class BaseThicknessShader(StrokeShader, ThicknessModifierMixIn):
     def __init__(self, thickness, position, ratio):
         StrokeShader.__init__(self)
         ThicknessModifierMixIn.__init__(self)
         if position == 'CENTER':
-            self.__outer = thickness * 0.5
-            self.__inner = thickness - self.__outer
+            self.outer = thickness * 0.5
+            self.inner = thickness - self.outer
         elif position == 'INSIDE':
-            self.__outer = 0
-            self.__inner = thickness
+            self.outer = 0
+            self.inner = thickness
         elif position == 'OUTSIDE':
-            self.__outer = thickness
-            self.__inner = 0
+            self.outer = thickness
+            self.inner = 0
         elif position == 'RELATIVE':
-            self.__outer = thickness * ratio
-            self.__inner = thickness - self.__outer
+            self.outer = thickness * ratio
+            self.inner = thickness - self.outer
         else:
             raise ValueError("unknown thickness position: " + position)
 
     def shade(self, stroke):
         for svert in stroke:
-            self.set_thickness(svert, self.__outer, self.__inner)
+            self.set_thickness(svert, self.outer, self.inner)
 
 
 # Along Stroke modifiers
@@ -322,16 +320,12 @@ class ThicknessAlongStrokeShader(ThicknessBlenderMixIn, CurveMappingModifier):
                  blend, influence, mapping, invert, curve, value_min, value_max):
         ThicknessBlenderMixIn.__init__(self, thickness_position, thickness_ratio)
         CurveMappingModifier.__init__(self, blend, influence, mapping, invert, curve)
-        self.value_min = value_min
-        self.value_max = value_max
+        self.value = Value(value_min, value_max, value_max - value_min)
 
     def shade(self, stroke):
-        delta = self.value_max - self.value_min
         for svert, t in zip(stroke, iter_t2d_along_stroke(stroke)):
-            (R, L) = svert.attribute.thickness
-            b = self.value_min + self.evaluate(t) * delta
-            (R, L) = self.blend_thickness(R, L, b)
-            self.set_thickness(svert, R, L)
+            b = self.value.min + self.evaluate(t) * self.value.delta
+            self.blend_set_thickness(svert, b)
 
 
 # -- Distance from Camera modifiers -- #
@@ -340,11 +334,10 @@ class ColorDistanceFromCameraShader(ColorRampModifier):
     """Picks a color value from a ramp based on the vertex' distance from the camera """
     def __init__(self, blend, influence, ramp, range_min, range_max):
         ColorRampModifier.__init__(self, blend, influence, ramp)
-        self.range_min = range_min
-        self.range_max = range_max
+        self.range = Range(range_min, range_max, range_max - range_min)
 
     def shade(self, stroke):
-        it = iter_distance_from_camera(stroke, self.range_min, self.range_max)
+        it = iter_distance_from_camera(stroke, *self.range)
         for svert, t in it:
             a = svert.attribute.color
             b = self.evaluate(t)
@@ -355,32 +348,15 @@ class AlphaDistanceFromCameraShader(CurveMappingModifier):
     """Picks an alpha value from a curve based on the vertex' distance from the camera """
     def __init__(self, blend, influence, mapping, invert, curve, range_min, range_max):
         CurveMappingModifier.__init__(self, blend, influence, mapping, invert, curve)
-        self.range = Range(range_min, range_max)
+        self.range = Range(range_min, range_max, range_max - range_min)
 
     def shade(self, stroke):
-        it = iter_distance_from_camera(stroke, self.range.min, self.range.max)
+        it = iter_distance_from_camera(stroke, *self.range)
         for svert, t in it:
             a = svert.attribute.alpha
             b = self.evaluate(t)
             svert.attribute.alpha = self.blend(a, b)
 
-
-class ThicknessDistanceFromCameraShader1(ThicknessBlenderMixIn, CurveMappingModifier):
-    """Picks a thickness value from a curve based on the vertex' distance from the camera """
-    def __init__(self, thickness_position, thickness_ratio,
-                 blend, influence, mapping, invert, curve, range_min, range_max, value_min, value_max):
-        ThicknessBlenderMixIn.__init__(self, thickness_position, thickness_ratio)
-        CurveMappingModifier.__init__(self, blend, influence, mapping, invert, curve)
-        self.range_min = range_min
-        self.range_max = range_max
-        self.value_min = value_min
-        self.value_max = value_max
-
-    def shade(self, stroke):
-        delta = self.value_max - self.value_min
-        for (svert, t) in iter_distance_from_camera(stroke, self.range_min, self.range_max):
-            b = self.value_min + self.evaluate(t) * delta
-            self.blend_set_thickness(svert, b)
 
 class ThicknessDistanceFromCameraShader(ThicknessBlenderMixIn, CurveMappingModifier):
     """Picks a thickness value from a curve based on the vertex' distance from the camera """
@@ -388,11 +364,11 @@ class ThicknessDistanceFromCameraShader(ThicknessBlenderMixIn, CurveMappingModif
                  blend, influence, mapping, invert, curve, range_min, range_max, value_min, value_max):
         ThicknessBlenderMixIn.__init__(self, thickness_position, thickness_ratio)
         CurveMappingModifier.__init__(self, blend, influence, mapping, invert, curve)
-        self.range = Range(min=range_min, max=range_max)
-        self.value = Value(min=value_min, max=value_max, delta=value_max - value_min)
+        self.range = Range(range_min, range_max, range_max - range_min)
+        self.value = Value(value_min, value_max, value_max - value_min)
 
     def shade(self, stroke):
-        for (svert, t) in iter_distance_from_camera(stroke, self.range.min, self.range.max):
+        for (svert, t) in iter_distance_from_camera(stroke, *self.range):
             b = self.value.min + self.evaluate(t) * self.value.delta
             self.blend_set_thickness(svert, b)
 
@@ -405,14 +381,14 @@ class ColorDistanceFromObjectShader(ColorRampModifier):
         ColorRampModifier.__init__(self, blend, influence, ramp)
         if target is None:
             raise ValueError("ColorDistanceFromObjectShader: target can't be None ")
-        self.range = Range(range_min, range_max)
+        self.range = Range(range_min, range_max, range_max - range_min)
         # construct a model-view matrix
         matrix = getCurrentScene().camera.matrix_world.inverted()
         # get the object location in the camera coordinate
         self.loc = matrix * target.location
 
     def shade(self, stroke):
-        it = iter_distance_from_object(stroke, self.loc, self.range)
+        it = iter_distance_from_object(stroke, self.loc, *self.range)
         for svert, t in it:
             a = svert.attribute.color
             b = self.evaluate(t)
@@ -425,14 +401,14 @@ class AlphaDistanceFromObjectShader(CurveMappingModifier):
         CurveMappingModifier.__init__(self, blend, influence, mapping, invert, curve)
         if target is None:
             raise ValueError("AlphaDistanceFromObjectShader: target can't be None ")
-        self.range = Range(range_min, range_max)
+        self.range = Range(range_min, range_max, range_max - range_min)
         # construct a model-view matrix
         matrix = getCurrentScene().camera.matrix_world.inverted()
         # get the object location in the camera coordinate
         self.loc = matrix * target.location
 
     def shade(self, stroke):
-        it = iter_distance_from_object(stroke, self.loc, self.range.min, self.range.max)
+        it = iter_distance_from_object(stroke, self.loc, *self.range)
         for svert, t in it:
             a = svert.attribute.alpha
             b = self.evaluate(t)
@@ -447,7 +423,7 @@ class ThicknessDistanceFromObjectShader(ThicknessBlenderMixIn, CurveMappingModif
         CurveMappingModifier.__init__(self, blend, influence, mapping, invert, curve)
         if target is None:
             raise ValueError("ThicknessDistanceFromObjectShader: target can't be None ")
-        self.range = Range(range_min, range_max)
+        self.range = Range(range_min, range_max, range_max - range_min)
         self.value = Value(value_min, value_max, value_max - value_min)
         # construct a model-view matrix
         matrix = getCurrentScene().camera.matrix_world.inverted()
@@ -455,7 +431,7 @@ class ThicknessDistanceFromObjectShader(ThicknessBlenderMixIn, CurveMappingModif
         self.loc = matrix * target.location
 
     def shade(self, stroke):
-        it = iter_distance_from_object(stroke, self.loc, self.range)
+        it = iter_distance_from_object(stroke, self.loc, *self.range)
         for svert, t in it:
             b = self.value.min + self.evaluate(t) * self.value.delta 
             self.blend_set_thickness(svert, b)
@@ -471,10 +447,9 @@ class ColorMaterialShader(ColorRampModifier):
         self.use_ramp = use_ramp
         self.func = CurveMaterialF0D()
 
-    def shade(self, stroke):
-
+    def shade(self, stroke, attributes={'DIFF', 'SPEC'}):
         it = Interface0DIterator(stroke)
-        if self.attribute in {'DIFF', 'SPEC'} and not self.use_ramp:
+        if not self.use_ramp and self.attribute in attributes:
             for svert in it:
                 material = self.func(it)
                 a = svert.attribute.color
@@ -486,7 +461,7 @@ class ColorMaterialShader(ColorRampModifier):
                 a = svert.attribute.color
                 b = self.evaluate(t)
                 svert.attribute.color = self.blend_ramp(a, b)
-        print("ColorMaterialShader ", stroke[-1].attribute.color)
+
 
 
 class AlphaMaterialShader(CurveMappingModifier):
@@ -529,9 +504,9 @@ class ThicknessMaterialShader(ThicknessBlenderMixIn, CurveMappingModifier):
 class CalligraphicThicknessShader(ThicknessBlenderMixIn, ScalarBlendModifier):
     """Thickness modifier for achieving a calligraphy-like effect """
     def __init__(self, thickness_position, thickness_ratio,
-                 blend, influence, orientation, thickness_min, thickness_max):
+                 blend_type, influence, orientation, thickness_min, thickness_max):
         ThicknessBlenderMixIn.__init__(self, thickness_position, thickness_ratio)
-        ScalarBlendModifier.__init__(self, blend, influence)
+        ScalarBlendModifier.__init__(self, blend_type, influence)
         self.orientation = Vector((cos(orientation), sin(orientation)))
         self.thickness = Thickness(thickness_min, thickness_max, thickness_max - thickness_min)
         self.func = VertexOrientation2DF0D()
@@ -584,17 +559,17 @@ class PerlinNoise1DShader(StrokeShader):
     """
     def __init__(self, freq=10, amp=10, oct=4, angle=radians(45), seed=-1):
         StrokeShader.__init__(self)
-        self.__noise = Noise(seed)
-        self.__freq = freq
-        self.__amp = amp
-        self.__oct = oct
-        self.__dir = Vector((cos(angle), sin(angle)))
+        self.noise = Noise(seed)
+        self.freq = freq
+        self.amp = amp
+        self.oct = oct
+        self.dir = Vector((cos(angle), sin(angle)))
 
     def shade(self, stroke):
         length = stroke.length_2d
         for svert in stroke:
-            nres = self.__noise.turbulence1(length * svert.u, self.__freq, self.__amp, self.__oct)
-            svert.point += nres * self.__dir
+            nres = self.noise.turbulence1(length * svert.u, self.freq, self.amp, self.oct)
+            svert.point += nres * self.dir
         stroke.update_length()
 
 
@@ -608,17 +583,17 @@ class PerlinNoise2DShader(StrokeShader):
     """
     def __init__(self, freq=10, amp=10, oct=4, angle=radians(45), seed=-1):
         StrokeShader.__init__(self)
-        self.__noise = Noise(seed)
-        self.__freq = freq
-        self.__amp = amp
-        self.__oct = oct
-        self.__dir = Vector((cos(angle), sin(angle)))
+        self.noise = Noise(seed)
+        self.freq = freq
+        self.amp = amp
+        self.oct = oct
+        self.dir = Vector((cos(angle), sin(angle)))
 
     def shade(self, stroke):
         for svert in stroke:
             projected = Vector((svert.projected_x, svert.projected_y))
-            nres = self.__noise.turbulence2(projected, self.__freq, self.__amp, self.__oct)
-            svert.point += nres * self.__dir
+            nres = self.noise.turbulence2(projected, self.freq, self.amp, self.oct)
+            svert.point += nres * self.dir
         stroke.update_length()
 
 
@@ -626,14 +601,14 @@ class Offset2DShader(StrokeShader):
     """Offsets the stroke by a given amount """
     def __init__(self, start, end, x, y):
         StrokeShader.__init__(self)
-        self.__start = start
-        self.__end = end
-        self.__xy = Vector((x, y))
+        self.start = start
+        self.end = end
+        self.xy = Vector((x, y))
 
     def shade(self, stroke):
         for svert, n in zip(stroke, tuple(stroke_normal(stroke))):
-            a = self.__start + svert.u * (self.__end - self.__start)
-            svert.point += (n * a) + self.__xy
+            a = self.start + svert.u * (self.end - self.start)
+            svert.point += (n * a) + self.xy
         stroke.update_length()
 
 
@@ -641,34 +616,34 @@ class Transform2DShader(StrokeShader):
     """Transforms the stroke (scale, rotation, location) around a given pivot point """
     def __init__(self, pivot, scale_x, scale_y, angle, pivot_u, pivot_x, pivot_y):
         StrokeShader.__init__(self)
-        self.__pivot = pivot
+        self.pivot = pivot
         self.scale = Vector((scale_x, scale_y))
         self.cos_theta = cos(angle)
         self.sin_theta = sin(angle)
-        self.__pivot_u = pivot_u
-        self.__pivot_x = pivot_x
-        self.__pivot_y = pivot_y
+        self.pivot_u = pivot_u
+        self.pivot_x = pivot_x
+        self.pivot_y = pivot_y
         if not pivot in {'START', 'END', 'CENTER', 'ABSOLUTE', 'PARAM'}:
             raise ValueError("expected pivot in {'START', 'END', 'CENTER', 'ABSOLUTE', 'PARAM'}, not" + pivot)
 
     def shade(self, stroke):
         # determine the pivot of scaling and rotation operations
-        if self.__pivot == 'START':
+        if self.pivot == 'START':
             pivot = stroke[0].point
-        elif self.__pivot == 'END':
+        elif self.pivot == 'END':
             pivot = stroke[-1].point
-        elif self.__pivot == 'CENTER':
+        elif self.pivot == 'CENTER':
             pivot = (1 / len(stroke)) * sum((svert.point for svert in stroke), Vector((0.0, 0.0)))
-        elif self.__pivot == 'ABSOLUTE':
-            pivot = Vector((self.__pivot_x, self.__pivot_y))
-        elif self.__pivot == 'PARAM':
-            if self.__pivot_u < stroke[0].u:
+        elif self.pivot == 'ABSOLUTE':
+            pivot = Vector((self.pivot_x, self.pivot_y))
+        elif self.pivot == 'PARAM':
+            if self.pivot_u < stroke[0].u:
                 pivot = stroke[0].point
             else:
                 for prev, svert in pairwise(stroke):
-                    if self.__pivot_u < svert.u:
+                    if self.pivot_u < svert.u:
                         break
-                pivot = svert.point + (svert.u - self.__pivot_u) * (prev.point - svert.point)
+                pivot = svert.point + (svert.u - self.pivot_u) * (prev.point - svert.point)
 
         # apply scaling and rotation operations
         for svert in stroke:
@@ -686,13 +661,13 @@ class Transform2DShader(StrokeShader):
 class QuantitativeInvisibilityRangeUP1D(UnaryPredicate1D):
     def __init__(self, qi_start, qi_end):
         UnaryPredicate1D.__init__(self)
-        self.__getQI = QuantitativeInvisibilityF1D()
-        self.__qi_start = qi_start
-        self.__qi_end = qi_end
+        self.getQI = QuantitativeInvisibilityF1D()
+        self.qi_start = qi_start
+        self.qi_end = qi_end
 
     def __call__(self, inter):
-        qi = self.__getQI(inter)
-        return self.__qi_start <= qi <= self.__qi_end
+        qi = self.getQI(inter)
+        return self.qi_start <= qi <= self.qi_end
 
 
 class ObjectNamesUP1D(UnaryPredicate1D):
@@ -1151,7 +1126,7 @@ def process(layer_name, lineset_name):
             print("Warning: Thickness position options are applied when chaining is disabled\n"
                   "         or the Plain chaining is used with the Same Object option enabled.")
 
-    shaders_list.append(BaseColorShader(*(linestyle.color), alpha=linestyle.alpha))
+    shaders_list.append(ConstantColorShader(*(linestyle.color), alpha=linestyle.alpha))
     shaders_list.append(BaseThicknessShader(linestyle.thickness, thickness_position,
                                             linestyle.thickness_ratio))
     # -- Modifiers and textures -- #

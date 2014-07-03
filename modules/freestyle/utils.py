@@ -150,13 +150,12 @@ def iter_t2d_along_stroke(stroke):
         yield min(distance / total, 1.0) if total != 0.0 else 0.0
 
 
-def iter_distance_from_camera(stroke, range_min, range_max):
+def iter_distance_from_camera(stroke, range_min, range_max, normfac):
     """
     Yields the distance to the camera relative to the maximum
     possible distance for every stroke vertex, constrained by
     given minimum and maximum values.
     """
-    normfac = range_max - range_min
     for svert in stroke:
         # length in the camera coordinate
         distance = svert.point_3d.length
@@ -165,14 +164,12 @@ def iter_distance_from_camera(stroke, range_min, range_max):
         else:
             yield (svert, 0.0) if range_min > distance else (svert, 1.0)
 
-def iter_distance_from_object(stroke, location, range):
+def iter_distance_from_object(stroke, location, range_min, range_max, normfac):
     """
     yields the distance to the given object relative to the maximum
     possible distance for every stroke vertex, constrained by
     given minimum and maximum values.
     """
-    range_min, range_max = range 
-    normfac = range_max - range_min  # normalization factor
     for svert in stroke:
         distance = (svert.point_3d - location).length # in the camera coordinate
         if range_min < distance < range_max:
