@@ -90,10 +90,11 @@ from freestyle.utils import (
     bound,
     pairwise,
     iter_distance_along_stroke,
-    get_material_value,
+    #get_material_value,
     iter_t2d_along_stroke,
     iter_distance_from_camera,
-    iter_distance_from_object
+    iter_distance_from_object,
+    iter_material_value,
     )
 from _freestyle import (
     blendRamp,
@@ -106,11 +107,11 @@ import time
 from mathutils import Vector
 from math import pi, sin, cos, acos, radians
 from itertools import cycle, tee
-from functools import lru_cache, namedtuple
+from functools import namedtuple
 
+# named tuple primitives used for storing data.
 Thickness = namedtuple("Thickness", ["min", "max", "delta"])
 Range = namedtuple("Range", ["min", "max", "delta"])
-#Range.__new__.__defaults__ = (0.0, 0.0, 0.0)
 Value = namedtuple("Value", ["min", "max", "delta"])
 
 
@@ -165,8 +166,7 @@ class CurveMappingModifier(ScalarBlendModifier):
     def __init__(self, blend, influence, mapping, invert, curve):
         ScalarBlendModifier.__init__(self, blend, influence)
         assert mapping in {'LINEAR', 'CURVE'}
-        self.mapping = getattr(self, mapping)
-        self.mapping_type = mapping
+        self.evaluate = getattr(self, mapping)
         self.invert = invert
         self.curve = curve
 
@@ -175,11 +175,6 @@ class CurveMappingModifier(ScalarBlendModifier):
 
     def CURVE(self, t):
         return evaluateCurveMappingF(self.curve, 0, t)
-
-    def evaluate(self, t):
-        """ Shortcut for the above methods, significantly faster """
-        return (evaluateCurveMappingF(self.curve, 0, t) if (self.mapping_type == 'CURVE') 
-                                                        else (t if not self.invert else (1.0 - t)))
 
 
 class ThicknessModifierMixIn:
@@ -212,38 +207,18 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
         self.position = self.position = position
         self.ratio = ratio
 
-    def blend_thickness(self, outer, inner, v):
-        v = self.blend(outer + inner, v)
-        if self.position == 'CENTER':
-            outer = v * 0.5
-            inner = v - outer
-        elif self.position == 'INSIDE':
-            outer = 0
-            inner = v
-        elif self.position == 'OUTSIDE':
-            outer = v
-            inner = 0
-        elif self.position == 'RELATIVE':
-            outer = v * self.ratio
-            inner = v - outer
-        else:
-            raise ValueError("unknown thickness position: " + self.position)
-        return outer, inner
-
-    def blend_set_thickness(self, svert, v):
-        """ Chains blend_thickness and set_thickness together. This saves function calls 
-        and is generally more efficient, as both methods are called with almost the same
-        arguments 
-        """
+    def blend_thickness(self, svert, v):
+        """ Blends and sets the thickness."""
         outer, inner = svert.attribute.thickness
-        #print(self.blend, type(self.blend))
+        #fe = svert.first_svertex.get_fedge(svert.second_svertex)
+        fe = svert.fedge
         v = self.blend(outer + inner, v)
 
-        # Part 1: blend 
+        # Part 1: blend
         if self.position == "CENTER":
             outer = inner = v * 0.5
         elif self.position == "INSIDE":
-            outer, inner = 0, v 
+            outer, inner = 0, v
         elif self.position == "OUTSIDE":
             outer, inner = v, 0
         elif self.position == "RELATIVE":
@@ -252,9 +227,7 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
             raise ValueError("unknown thickness position: " + position)
 
         # Part 2: set
-        fe = svert.first_svertex.get_fedge(svert.second_svertex)
-        nature = fe.nature
-        if (nature & Nature.BORDER):
+        if (fe.nature & Nature.BORDER):
             if self.persp_camera:
                 point = -svert.point_3d.normalized()
                 dir = point.dot(fe.normal_left)
@@ -262,7 +235,7 @@ class ThicknessBlenderMixIn(ThicknessModifierMixIn):
                 dir = fe.normal_left.z
             if dir < 0.0:  # the back side is visible
                 outer, inner = inner, outer
-        elif (nature & Nature.SILHOUETTE):
+        elif (fe.nature & Nature.SILHOUETTE):
             if fe.is_smooth:  # TODO more tests needed
                 outer, inner = inner, outer
         else:
@@ -325,7 +298,7 @@ class ThicknessAlongStrokeShader(ThicknessBlenderMixIn, CurveMappingModifier):
     def shade(self, stroke):
         for svert, t in zip(stroke, iter_t2d_along_stroke(stroke)):
             b = self.value.min + self.evaluate(t) * self.value.delta
-            self.blend_set_thickness(svert, b)
+            self.blend_thickness(svert, b)
 
 
 # -- Distance from Camera modifiers -- #
@@ -370,7 +343,7 @@ class ThicknessDistanceFromCameraShader(ThicknessBlenderMixIn, CurveMappingModif
     def shade(self, stroke):
         for (svert, t) in iter_distance_from_camera(stroke, *self.range):
             b = self.value.min + self.evaluate(t) * self.value.delta
-            self.blend_set_thickness(svert, b)
+            self.blend_thickness(svert, b)
 
 
 # Distance from Object modifiers
@@ -433,13 +406,13 @@ class ThicknessDistanceFromObjectShader(ThicknessBlenderMixIn, CurveMappingModif
     def shade(self, stroke):
         it = iter_distance_from_object(stroke, self.loc, *self.range)
         for svert, t in it:
-            b = self.value.min + self.evaluate(t) * self.value.delta 
-            self.blend_set_thickness(svert, b)
+            b = self.value.min + self.evaluate(t) * self.value.delta
+            self.blend_thickness(svert, b)
 
 
 # Material modifiers
 
-class ColorMaterialShader(ColorRampModifier):
+class ColorMaterialShader2(ColorRampModifier):
     """ Assigns a color to the vertices based on their underlying material """
     def __init__(self, blend, influence, ramp, material_attribute, use_ramp):
         ColorRampModifier.__init__(self, blend, influence, ramp)
@@ -462,7 +435,27 @@ class ColorMaterialShader(ColorRampModifier):
                 b = self.evaluate(t)
                 svert.attribute.color = self.blend_ramp(a, b)
 
+class ColorMaterialShader(ColorRampModifier):
+    """ Assigns a color to the vertices based on their underlying material """
+    def __init__(self, blend, influence, ramp, material_attribute, use_ramp):
+        ColorRampModifier.__init__(self, blend, influence, ramp)
+        self.attribute = material_attribute
+        self.use_ramp = use_ramp
+        self.func = CurveMaterialF0D()
 
+    def shade(self, stroke, attributes={'DIFF', 'SPEC'}):
+        it = Interface0DIterator(stroke)
+        if not self.use_ramp and self.attribute in attributes:
+            for svert in it:
+                material = self.func(it)
+                a = svert.attribute.color
+                b = material.diffuse[0:3] if self.attribute == 'DIFF' else material.specular[0:3]
+                svert.attribute.color = self.blend_ramp(a, b)
+        else:
+            for svert, value in iter_material_value(stroke, self.func, self.attribute):
+                a = svert.attribute.color
+                b = self.evaluate(value)
+                svert.attribute.color = self.blend_ramp(a, b)
 
 class AlphaMaterialShader(CurveMappingModifier):
     """ Assigns an alpha value to the vertices based on their underlying material """
@@ -472,11 +465,9 @@ class AlphaMaterialShader(CurveMappingModifier):
         self.func = CurveMaterialF0D()
 
     def shade(self, stroke):
-        it = Interface0DIterator(stroke)
-        for svert in it:
-            t = get_material_value(self.func(it), self.attribute)
+        for svert, value in iter_material_value(stroke, self.func, self.attribute):
             a = svert.attribute.alpha
-            b = self.evaluate(t)
+            b = self.evaluate(value)
             svert.attribute.alpha = self.blend(a, b)
 
 
@@ -491,11 +482,9 @@ class ThicknessMaterialShader(ThicknessBlenderMixIn, CurveMappingModifier):
         self.func = CurveMaterialF0D()
 
     def shade(self, stroke):
-        it = Interface0DIterator(stroke)
-        for svert in it:
-            t = get_material_value(self.func(it), self.attribute)
-            b = self.value.min + self.evaluate(t) * self.value.delta
-            self.blend_set_thickness(svert, b)
+        for svert, value in iter_material_value(stroke, self.func, self.attribute):
+            b = self.value.min + self.evaluate(value) * self.value.delta
+            self.blend_thickness(svert, b)
 
 
 # Calligraphic thickness modifier
@@ -522,13 +511,12 @@ class CalligraphicThicknessShader(ThicknessBlenderMixIn, ScalarBlendModifier):
                 dir.x, dir.y = -dir.y / l, dir.x / l
                 fac = abs(dir * self.orientation)
                 #b = max(0.0, self.thickness.min + fac * self.thickness.delta)
-                # above max call seems unnecessary (depends on input from user, but I think 
+                # above max call seems unnecessary (depends on input from user, but I think
                 # it's safe to assume that (thickness.min > 0 and thickness.delta > 0)
                 b = self.thickness.min + fac * self.thickness.delta
             else:
                 b = self.thickness.min
-            self.blend_set_thickness(svert, b)
-
+            self.blend_thickness(svert, b)
 
 
 # Geometry modifiers
@@ -542,7 +530,7 @@ class SinusDisplacementShader(StrokeShader):
         self._phase = phase / wavelength * 2 * pi
 
     def shade(self, stroke):
-        # to get reliable results, the normals have to be stored (need to investigate why)
+        # normals are stored in a tuple, so they don't update when we reposition vertices.
         normals = tuple(stroke_normal(stroke))
         distances = iter_distance_along_stroke(stroke)
         for svert, distance, normal in zip(stroke, distances, normals):
@@ -606,9 +594,11 @@ class Offset2DShader(StrokeShader):
         self.xy = Vector((x, y))
 
     def shade(self, stroke):
-        for svert, n in zip(stroke, tuple(stroke_normal(stroke))):
+        # normals are stored in a tuple, so they don't update when we reposition vertices.
+        normals = tuple(stroke_normal(stroke))
+        for svert, normal in zip(stroke, normals):
             a = self.start + svert.u * (self.end - self.start)
-            svert.point += (n * a) + self.xy
+            svert.point += (normal * a) + self.xy
         stroke.update_length()
 
 
@@ -623,7 +613,7 @@ class Transform2DShader(StrokeShader):
         self.pivot_u = pivot_u
         self.pivot_x = pivot_x
         self.pivot_y = pivot_y
-        if not pivot in {'START', 'END', 'CENTER', 'ABSOLUTE', 'PARAM'}:
+        if pivot not in {'START', 'END', 'CENTER', 'ABSOLUTE', 'PARAM'}:
             raise ValueError("expected pivot in {'START', 'END', 'CENTER', 'ABSOLUTE', 'PARAM'}, not" + pivot)
 
     def shade(self, stroke):
@@ -708,10 +698,8 @@ class SplitPatternController:
         self.sampling = float(sampling)
         k = len(pattern) // 2
         n = k * 2
-        #self.start_pos = [pattern[i] + pattern[i + 1] for i in range(0, n, 2)]
-        #self.stop_pos = [pattern[i] for i in range(0, n, 2)]
-        self.start_pos = [prev + current for prev, current in pairwise(pattern)]
-        self.stop_pos = [prev for prev, _ in pairwise(pattern)]
+        self.start_pos = [pattern[i] + pattern[i + 1] for i in range(0, n, 2)]
+        self.stop_pos = [pattern[i] for i in range(0, n, 2)]
         self.init()
 
     def init(self):
@@ -755,17 +743,18 @@ class DashedLineShader(StrokeShader):
         (i+1)-th vertices. """
         sampling = 1.0
         it = stroke.stroke_vertices_begin(sampling)
-        for svert, pattern in zip(it, cycle(self._pattern)):
-
+        pattern_cycle = cycle(self._pattern)
+        pattern = next(pattern_cycle)
+        for svert in it:
             pos = it.t  # curvilinear abscissa
 
             if pos - start + sampling > pattern:
                 start = pos
+                pattern = next(pattern_cycle)
                 visible = not visible
 
             if not visible:
                 it.object.attribute.visible = False
-
 
 
 # predicates for chaining
@@ -802,6 +791,7 @@ class AngleLargerThanBP1D(BinaryPredicate1D):
 
 # predicates for selection
 
+
 class LengthThresholdUP1D(UnaryPredicate1D):
     def __init__(self, length_min=None, length_max=None):
         UnaryPredicate1D.__init__(self)
@@ -816,8 +806,9 @@ class LengthThresholdUP1D(UnaryPredicate1D):
             return False
         return True
 
+
 class FaceMarkBothUP1D(UnaryPredicate1D):
-    def __call__(self, inter:ViewEdge):
+    def __call__(self, inter: ViewEdge):
         while fe is not None:
             if fe.is_smooth:
                 if fe.face_mark:
@@ -833,7 +824,7 @@ class FaceMarkBothUP1D(UnaryPredicate1D):
 
 
 class FaceMarkOneUP1D(UnaryPredicate1D):
-    def __call__(self, inter:ViewEdge):
+    def __call__(self, inter: ViewEdge):
         fe = inter.first_fedge
         while fe is not None:
             if fe.is_smooth:
@@ -853,20 +844,21 @@ class FaceMarkOneUP1D(UnaryPredicate1D):
 
 class MaterialBoundaryUP0D(UnaryPredicate0D):
     def __call__(self, it):
-        try:
+        if not it.is_end and it.is_begin:
             it.decrement()
             prev = it.object
             svert = next(it)
             succ = next(it)
-        except (RuntimeError, StopIteration) as e:
+        else:
             # iterator at start or begin
             return False
-        
+
         fe = svert.get_fedge(prev)
         idx1 = fe.material_index if fe.is_smooth else fe.material_index_left
         fe = svert.get_fedge(succ)
         idx2 = fe.material_index if fe.is_smooth else fe.material_index_left
         return idx1 != idx2
+
 
 class Curvature2DAngleThresholdUP0D(UnaryPredicate0D):
     def __init__(self, angle_min=None, angle_max=None):
@@ -1114,9 +1106,7 @@ def process(layer_name, lineset_name):
         elif m.type == '2D_TRANSFORM':
             shaders_list.append(Transform2DShader(
                 m.pivot, m.scale_x, m.scale_y, m.angle, m.pivot_u, m.pivot_x, m.pivot_y))
-
-    
-    
+            
     if (not linestyle.use_chaining) or (linestyle.chaining == 'PLAIN' and linestyle.use_same_object):
         thickness_position = linestyle.thickness_position
     else:

@@ -83,13 +83,16 @@ from freestyle.utils import (
     bounding_box,
     phase_to_direction,
     pairwise,
+    stroke_curvature,
     )
 
 from freestyle.utils import ContextFunctions as CF
 
-from math import atan, cos, pi, sin, sinh, sqrt, degrees, acos
-from mathutils import Vector
+from math import atan, cos, pi, sin, sinh, sqrt, degrees, acos, e
+from mathutils import Vector, Color
 from random import randint
+from functools import namedtuple
+from itertools import islice
 
 import bpy
 import random
@@ -240,6 +243,7 @@ class pyNonLinearVaryingThicknessShader(StrokeShader):
             t = (1.0 - c) * self._thicknessMax + c * self._thicknessMin
             svert.attribute.thickness = (t / 2.0, t / 2.0)
 
+
 class pySLERPThicknessShader(StrokeShader):
     """
     Assigns thickness to a stroke based on spherical linear interpolation
@@ -258,10 +262,11 @@ class pySLERPThicknessShader(StrokeShader):
         for i, svert in enumerate(stroke):
             c = i / n
             if i < (n * 0.5):
-                t = sin((1-c) * omega) / sinhyp * self._thicknessMin + sin(c * omega) / sinhyp * maxT
+                t = sin((1 - c) * omega) / sinhyp * self._thicknessMin + sin(c * omega) / sinhyp * maxT
             else:
-                t = sin((1-c) * omega) / sinhyp * maxT + sin(c * omega) / sinhyp * self._thicknessMin
+                t = sin((1 - c) * omega) / sinhyp * maxT + sin(c * omega) / sinhyp * self._thicknessMin
             svert.attribute.thickness = (t / 2.0, t / 2.0)
+
 
 class pyTVertexThickenerShader(StrokeShader):
     """
@@ -291,7 +296,6 @@ class pyTVertexThickenerShader(StrokeShader):
                 svert.attribute.thickness = (r * tr, r * tl)
 
 
-
 class pyImportance2DThicknessShader(StrokeShader):
     """
     Assigns thickness based on distance to a given point in 2D space.
@@ -308,10 +312,10 @@ class pyImportance2DThicknessShader(StrokeShader):
         for svert in stroke:
             d = (svert.point_2d - self._origin).length
             k = (self._kmin if (d > self._w) else
-                (self._kmax * (self._w-d) + self._kmin * d) / self._w)
+                (self._kmax * (self._w - d) + self._kmin * d) / self._w)
 
             (tr, tl) = svert.attribute.thickness
-            svert.attribute.thickness = (k*tr/2.0, k*tl/2.0)
+            svert.attribute.thickness = (k * tr / 2.0, k * tl / 2.0)
 
 
 class pyImportance3DThicknessShader(StrokeShader):
@@ -328,10 +332,11 @@ class pyImportance3DThicknessShader(StrokeShader):
         for svert in stroke:
             d = (svert.point_3d - self._origin).length
             k = (self._kmin if (d > self._w) else
-                (self._kmax * (self._w-d) + self._kmin * d) / self._w)
+                (self._kmax * (self._w - d) + self._kmin * d) / self._w)
 
             (tr, tl) = svert.attribute.thickness
-            svert.attribute.thickness = (k*tr/2.0, k*tl/2.0)
+            svert.attribute.thickness = (k * tr / 2.0, k * tl / 2.0)
+
 
 class pyZDependingThicknessShader(StrokeShader):
     """
@@ -363,16 +368,16 @@ class VariableContourThicknessShader(StrokeShader):
         self.k2 = Kr2
         self.thickness_min = thickness1
         self.thickness_max = thickness2
- 
+
     def shade(self, stroke):
         delta_t = self.thickness_max - self.thickness_min
         fac = pow(self.k2 - self.k1, -1)
         for svert in stroke:
 
             curvatures = svert.first_svertex.curvatures
-            c1 = abs(curvatures[4]) if curvatures is not None else None 
+            c1 = abs(curvatures[4]) if curvatures is not None else None
             curvatures = svert.second_svertex.curvatures
-            c2 = abs(curvatures[4]) if curvatures is not None else None 
+            c2 = abs(curvatures[4]) if curvatures is not None else None
 
             if (c1 or c2) is None:
                 svert.attribute.thickness = (0.0, 0.0)
@@ -383,38 +388,13 @@ class VariableContourThicknessShader(StrokeShader):
             else:
                 Kr = c1 if c1 is not None else c2
 
-
-
             if self.thickness_min <= Kr <= self.thickness_max:
                 self.thickness_min + delta_t * (Kr - self.k1) * fac
             else:
                 bound(self.thickness_min, Kr, self.thickness_max)
 
-            svert.attribute.thickness = (Kr/2, Kr/2)
+            svert.attribute.thickness = (Kr / 2, Kr / 2)
 
-
-class CreaseAngleDependentThicknessShader1(StrokeShader):
-    def __init__(self, angle1, angle2, thickness1, thickness2):
-        StrokeShader.__init__(self)
-        self.angle_min = angle1
-        self.angle_max = angle2
-        self.thickness_min = thickness1
-        self.thickness_max = thickness2
- 
-    def shade(self, stroke):
-        delta_t = self.thickness_max - self.thickness_min
-        fac = pow(self.angle_max - self.angle_min, -1)
-        for svert in stroke:
-            fe = svert.first_svertex.get_fedge(svert.second_svertex)
-            if not fe.is_smooth:
-                angle = degrees(acos(-fe.normal_left.dot(fe.normal_right)))
-                if self.angle_min <= angle <= self.angle_max:
-                    t = self.thickness_min + delta_t * (angle - self.angle_min) * fac
-                else:
-                    t = bound(self.angle_min, angle, self.angle_max)
-                    
-                #print(angle, t)
-                svert.attribute.thickness = (t/2, t/2)
 
 class CreaseAngleDependentThicknessShader(StrokeShader):
     def __init__(self, angle1, angle2, thickness1, thickness2):
@@ -431,7 +411,7 @@ class CreaseAngleDependentThicknessShader(StrokeShader):
             fe = svert.first_svertex.get_fedge(svert.second_svertex)
             if not fe.is_smooth:
                 angle = degrees(acos(-fe.normal_left.dot(fe.normal_right)))
-                
+
                 if angle < self.angle_min:
                     t = self.thickness_min
                 elif angle > self.angle_max:
@@ -439,18 +419,57 @@ class CreaseAngleDependentThicknessShader(StrokeShader):
                 else:
                     t = self.thickness_min + delta_t * (angle - self.angle_min) * fac
 
-                svert.attribute.thickness = (t/2, t/2)
+                svert.attribute.thickness = (t / 2, t / 2)
+
+class CurvatureThicknessShader(StrokeShader):
+    
+    def __init__(self, min, max, c_min=Color((1,0,0)), c_max=Color((0,1,0))):
+        super().__init__()
+        Thickness = namedtuple("Thickness", ["min", "max", "delta"])
+        Col = namedtuple("Color", ["min", "max"])
+        self.thickness = Thickness(min, max, max - min)
+        self.color = Col(c_min, c_max)
+
+    def smooth(degree=2):
+        def wrapper(func):
+            def smoothListGaussian(*args, **kwargs):
+                window = degree * 2 - 1
+                weights = sum(pow(e, -(pow(4 * ((i - degree + 1) / window), 2))) * window for i in range(window))
+                data = tuple(func(*args, **kwargs))
+                return tuple(sum(elem * window for elem in islice(data, i, i + window)) / weights for i in range(len(data)))
+            return smoothListGaussian
+        return wrapper
+
+    @staticmethod
+    @smooth(degree=5)
+    def curvature(self, stroke):
+        for K in stroke_curvature(iter(stroke)):
+            K = bound(-5, x, 5) / 3
+            t = (1.0 - K) * self.thickness.min + K * self.thickness.max
+            t = 0.0 if t < 1e-6 else t
+            if t < 1:
+                t /= 10
+            yield round(1.0 - t, 5)
+
+    def shade(self, stroke):
+        curvatures = self.curvature(self, stroke)
+        for svert, t in zip(stroke, curvatures):
+            c = (1 - t) * self.color.min + t * self.color.max 
+            svert.attribute.thickness = (10, 10)
+            svert.attribute.color = c
 
 # -- Color & Alpha Stroke Shaders -- #
+
 
 class pyConstantColorShader(StrokeShader):
     """
     Assigns a constant color to the stroke
     """
-    def __init__(self,r,g,b, a = 1):
+    def __init__(self, r, g, b, a=1.0):
         StrokeShader.__init__(self)
         self._color = (r, g, b)
         self._a = a
+
     def shade(self, stroke):
         for svert in stroke:
             svert.attribute.color = self._color
@@ -461,11 +480,18 @@ class pyIncreasingColorShader(StrokeShader):
     """
     Fades from one color to another along the stroke
     """
-    def __init__(self,r1,g1,b1,a1, r2,g2,b2,a2):
+    def __init__(self, *args):
         StrokeShader.__init__(self)
-        # use 4d vector to simplify math
-        self._c1 = Vector((r1, g1 ,b1, a1))
-        self._c2 = Vector((r2, g2, b2, a2))
+        if len(args) == 8:
+            # use 4d vector to simplify math
+            self._c1 = Vector(args[:4])
+            self._c2 = Vector(args[4:])
+        elif len(args) == 2:
+            # use 4d vector to simplify math
+            self._c1 = Vector(args[0])
+            self._c2 = Vector(args[1])
+        else:
+            raise ValueError("expected eight or two arguments, not " + args)
 
     def shade(self, stroke):
         n = len(stroke) - 1
@@ -477,16 +503,22 @@ class pyIncreasingColorShader(StrokeShader):
             svert.attribute.alpha = color[3]
 
 
-
 class pyInterpolateColorShader(StrokeShader):
     """
     Fades from one color to another and back
     """
-    def __init__(self,r1,g1,b1,a1, r2,g2,b2,a2):
+    def __init__(self, *args):
         StrokeShader.__init__(self)
-        # use 4d vector to simplify math
-        self._c1 = Vector((r1, g1 ,b1, a1))
-        self._c2 = Vector((r2, g2, b2, a2))
+        if len(args) == 8:
+            # use 4d vector to simplify math
+            self._c1 = Vector(args[:4])
+            self._c2 = Vector(args[4:])
+        elif len(args) == 2:
+            # use 4d vector to simplify math
+            self._c1 = Vector(args[0])
+            self._c2 = Vector(args[1])
+        else:
+            raise ValueError("expected eight or two arguments, not " + args)
 
     def shade(self, stroke):
         n = len(stroke) - 1
@@ -496,6 +528,7 @@ class pyInterpolateColorShader(StrokeShader):
             svert.attribute.color = color[:3]
             svert.attribute.alpha = color[3]
 
+
 class pyModulateAlphaShader(StrokeShader):
     """
     Limits the stroke's alpha between a min and max value.
@@ -504,6 +537,7 @@ class pyModulateAlphaShader(StrokeShader):
         StrokeShader.__init__(self)
         self.__min = min
         self.__max = max
+
     def shade(self, stroke):
         for svert in stroke:
             alpha = svert.attribute.alpha
@@ -560,7 +594,7 @@ class pyMaterialColorShader(StrokeShader):
 
             Y = Yn * pow(((L+16.)/116.), 3.)
             X = -9. * Y * u / ((u - 4.)* v - u * v)
-            Z = (9. * Y - 15*v*Y - v*X) /( 3. * v)
+            Z = (9. * Y - 15*v*Y - v*X) / (3. * v)
 
             r = 3.240479 * X - 1.53715 * Y - 0.498535 * Z
             g = -0.969256 * X + 1.875991 * Y + 0.041556 * Z

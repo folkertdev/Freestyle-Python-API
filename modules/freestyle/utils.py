@@ -62,6 +62,7 @@ def bounding_box(stroke):
 
 # -- General helper functions -- #
 
+
 @lru_cache(maxsize=32)
 def phase_to_direction(length):
     """
@@ -112,11 +113,13 @@ def get_chain_length(ve, orientation):
 
     return length
 
+
 def find_matching_vertex(id, it):
     """Finds the matching vertex, or returns None """
     return next((ve for ve in it if ve.id == id), None)
 
 # -- helper functions for iterating -- #
+
 
 def pairwise(iterable):
     """Yields a tuple containing the previous and current object """
@@ -125,7 +128,7 @@ def pairwise(iterable):
         it = iter(iterable)
         return zip(it, it.incremented())
     else:
-        a,b = tee(iterable)
+        a, b = tee(iterable)
         next(b, None)
         return zip(a, b)
 
@@ -164,6 +167,7 @@ def iter_distance_from_camera(stroke, range_min, range_max, normfac):
         else:
             yield (svert, 0.0) if range_min > distance else (svert, 1.0)
 
+
 def iter_distance_from_object(stroke, location, range_min, range_max, normfac):
     """
     yields the distance to the given object relative to the maximum
@@ -171,7 +175,7 @@ def iter_distance_from_object(stroke, location, range_min, range_max, normfac):
     given minimum and maximum values.
     """
     for svert in stroke:
-        distance = (svert.point_3d - location).length # in the camera coordinate
+        distance = (svert.point_3d - location).length  # in the camera coordinate
         if range_min < distance < range_max:
             yield (svert, (distance - range_min) / normfac)
         else:
@@ -206,6 +210,37 @@ def get_material_value(material, attribute):
     else:
         raise ValueError("unexpected material attribute: " + attribute)
 
+def iter_material_value(stroke, func, attribute):
+    "Returns a specific material attribute from the vertex' underlying material. "
+    it = Interface0DIterator(stroke)
+    for svert in it:
+        material = func(it)
+        # main
+        if attribute == 'DIFF':
+            value = rgb_to_bw(*material.diffuse[0:3])
+        elif attribute == 'ALPHA':
+            value = material.diffuse[3]
+        elif attribute == 'SPEC':
+            value = rgb_to_bw(*material.specular[0:3])
+        # diffuse seperate
+        elif attribute == 'DIFF_R':
+            value = material.diffuse[0]
+        elif attribute == 'DIFF_G':
+            value = material.diffuse[1]
+        elif attribute == 'DIFF_B':
+            value = material.diffuse[2]
+        # specular seperate
+        elif attribute == 'SPEC_R':
+            value = material.specular[0]
+        elif attribute == 'SPEC_G':
+            value = material.specular[1]
+        elif attribute == 'SPEC_B':
+            value = material.specular[2]
+        elif attribute == 'SPEC_HARDNESS':
+            value = material.shininess
+        else:
+            raise ValueError("unexpected material attribute: " + attribute)
+        yield (svert, value)
 
 def iter_distance_along_stroke(stroke):
     "Yields the absolute distance along the stroke up to the current vertex."
@@ -219,37 +254,36 @@ def iter_distance_along_stroke(stroke):
 
 # -- mathmatical operations -- #
 
+
 def stroke_curvature(it):
     """
     Compute the 2D curvature at the stroke vertex pointed by the iterator 'it'.
     K = 1 / R
     where R is the radius of the circle going through the current vertex and its neighbors
     """
+    for _ in it:
+        try:
+            it.decrement()
+            prev, current, succ = it.object.point.copy(), next(it).point.copy(), next(it).point.copy()
+            # return the iterator in an unchanged state
+            it.decrement()
+        except (StopIteration, RuntimeError):
+            yield 0.0
+            continue
 
-    if it.is_end or it.is_begin:
-        return 0.0
+        ab = (current - prev)
+        bc = (succ - current)
+        ac = (prev - succ)
 
-    next = it.incremented().point
-    prev = it.decremented().point
-    current = it.object.point
+        a, b, c = ab.length, bc.length, ac.length
 
+        try:
+            area = 0.5 * ab.cross(ac)
+            K = (4 * area) / (a * b * c)
+        except ZeroDivisionError:
+            K = 0.0
 
-    ab = (current - prev)
-    bc = (next - current)
-    ac = (prev - next)
-
-    a, b, c = ab.length, bc.length, ac.length
-
-    try:
-        area = 0.5 * ab.cross(ac)
-        K = (4 * area) / (a * b * c)
-        K = bound(0.0, K, 1.0)
-
-    except ZeroDivisionError:
-        K = 0.0
-
-    return K
-
+        yield abs(K)
 
 def stroke_normal(stroke):
     """
@@ -257,6 +291,13 @@ def stroke_normal(stroke):
     'it'.  It is noted that Normal2DF0D computes normals based on
     underlying FEdges instead, which is inappropriate for strokes when
     they have already been modified by stroke geometry modifiers.
+
+    The returned normals are dynamic: they update when the
+    vertex position (and therefore the vertex normal) changes.
+    for use in geometry modifiers it is advised to 
+    cast this generator function to a tuple or list
+
+    returns a list of normals
     """
     n = len(stroke) - 1
 
@@ -273,33 +314,3 @@ def stroke_normal(stroke):
             n1 = Vector((e1[1], -e1[0])).normalized()
             n2 = Vector((e2[1], -e2[0])).normalized()
             yield (n1 + n2).normalized()
-
-
-# DEPRECACTED and unused, the version above is way quicker
-def stroke_normal1(it):
-    """
-    Compute the 2D normal at the stroke vertex pointed by the iterator
-    'it'.  It is noted that Normal2DF0D computes normals based on
-    underlying FEdges instead, which is inappropriate for strokes when
-    they have already been modified by stroke geometry modifiers.
-    """
-    # first stroke segment
-    #it_next = it.incremented()
-    it_next = Interface0DIterator(it)
-    it_next.increment()
-    if it.is_begin:
-        e = it_next.object.point_2d - it.object.point_2d
-        return Vector((e[1], -e[0])).normalized()
-    # last stroke segment
-    #it_prev = it.decremented()
-    it_prev = Interface0DIterator(it)
-    it_prev.decrement()
-    if it_next.is_end:
-        e = it.object.point_2d - it_prev.object.point_2d
-        return Vector((e[1], -e[0])).normalized()
-    # two subsequent stroke segments
-    e1 = it_next.object.point_2d - it.object.point_2d
-    e2 = it.object.point_2d - it_prev.object.point_2d
-    n1 = Vector((e1[1], -e1[0])).normalized()
-    n2 = Vector((e2[1], -e2[0])).normalized()
-    return (n1 + n2).normalized()
